@@ -1,7 +1,6 @@
 import tensorflow as tf
 
 class MTNet:
-    
     def __init__(self, config, scope = 'MTNet'):
         self.config = config
         with tf.variable_scope(scope, reuse = False):
@@ -15,16 +14,25 @@ class MTNet:
             # ------- no-linear component----------------
 
             #n * <batch_size, en_rnn_hidden_sizes>
-            m_is = []
-            c_is = []
-            for i in range(self.config.n):
-                m_i = self.__encoder(X[:, i], scope = 'm')
-                m_is.append(m_i)
+            # m_is = []
+            # c_is = []
+            # for i in range(self.config.n):
+            #     m_i = self.__encoder(X[:, i], scope = 'm')
+            #     m_is.append(m_i)
+            #
+            #     c_i = self.__encoder(X[:, i], scope = 'c')
+            #     c_is.append(c_i)
+            m_is = tf.TensorArray(dtype = tf.float32, size = self.config.n)
+            _, output = tf.while_loop(lambda i, _: tf.less(i, config.n),
+                                              lambda i, output_ta: (i + 1, output_ta.write(i, self.__encoder(X[:, i], scope = 'm'))),
+                                              loop_vars = [0, m_is])
+            m_is = output.stack()
 
-                c_i = self.__encoder(X[:, i], scope = 'c')
-                c_is.append(c_i)
-            # m_is = tf.while_loop(lambda i : i < self.config.n, lambda item : self.__encoder(item, scope = 'm'), [0])
-
+            c_is = tf.TensorArray(dtype=tf.float32, size = self.config.n)
+            _, output = tf.while_loop(lambda i, _: tf.less(i, config.n),
+                                              lambda i, output_ta: (i + 1, output_ta.write(i, self.__encoder(X[:, i], scope = 'c'))),
+                                              loop_vars = [0, c_is])
+            c_is = output.stack()
             # <batch_size, n, en_rnn_hidden_sizes>
             m_is = tf.transpose(m_is, perm = [1, 0, 2])
             c_is = tf.transpose(c_is, perm = [1, 0, 2])
@@ -79,10 +87,18 @@ class MTNet:
         self.y_pred = y_pred
         self.loss = tf.losses.mean_squared_error(self.Y, y_pred)
         self.train_op = tf.train.AdamOptimizer(config.lr).minimize(self.loss)
-            
-    def __encoder(self, input_x, strides = [1, 1, 1, 1], padding = 'VALID', scope = 'default'):
 
+    def __encoder(self, input_x, strides = [1, 1, 1, 1], padding = 'VALID', scope = 'default'):
+        '''
+        :param input_x:  <batch_size, T, D>
+        :param strides:
+        :param padding:
+        :param scope:
+        :return: the embedded of the input_x
+        '''
         scope = 'Encoder_' + scope
+        batch_size = tf.shape(input_x)[0]
+
         # shape input_x 
         input_x = tf.expand_dims(input_x, -1)
         
@@ -121,25 +137,23 @@ class MTNet:
                 rnns = rnns[0]
 
             # attention layer
-            h_state = rnns.zero_state(self.config.batch_size, tf.float32)
+            h_state = rnns.zero_state(batch_size, tf.float32)
             
             # attention weights
             attr_v = tf.get_variable('attr_v', shape = [Tc, 1], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
             attr_w = tf.get_variable('attr_w', shape = [self.config.en_conv_hidden_size, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
             attr_u = tf.get_variable('attr_u', shape = [Tc, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
-            
+
             for t in range(Tc):
                 # h(t-1) dot attr_w
                 h_part = tf.matmul(h_state, attr_w)
 
                 # en_conv_hidden_size * <batch_size, 1>
-                e_ks = []
-                for k in range(self.config.en_conv_hidden_size):
-                    e_k = tf.tanh( h_part + tf.matmul(attr_input[k], attr_u) )
-                    e_k = tf.matmul(e_k, attr_v)
-                    
-                    e_ks.append(e_k)
-                    
+                e_ks = tf.TensorArray(tf.float32, self.config.en_conv_hidden_size)
+                _, output = tf.while_loop(lambda i, _ : tf.less(i, self.config.en_conv_hidden_size),
+                                          lambda i, output_ta : (i + 1, output_ta.write(i, tf.matmul(tf.tanh( h_part + tf.matmul(attr_input[i], attr_u) ), attr_v))),
+                                          [0, e_ks])
+                e_ks = output.stack()
                 # <batch_size, en_conv_hidden_size, 1>
                 e_ks = tf.transpose(e_ks, perm = [1, 0, 2])
                 e_ks = tf.reshape(e_ks, shape = [-1, self.config.en_conv_hidden_size])

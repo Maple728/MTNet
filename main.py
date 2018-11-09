@@ -4,6 +4,7 @@ from preprocess.get_data import *
 
 import numpy as np
 import tensorflow as tf
+import time
 
 is_train = True
 model_path = './checkpoints/mtnet.ckpt'
@@ -23,8 +24,9 @@ def run_one_epoch(model, batch_data, y_scaler, sess, is_train = True):
     all_rmse = []    
     for ds in batch_data:
         loss, pred = run_func(ds, sess)
-        if not is_train:
-            # un-norm the real value
+
+        # # un-norm the real value
+        if is_train is False:
             y_pre_list = []
             y_real_list = []
 
@@ -35,15 +37,12 @@ def run_one_epoch(model, batch_data, y_scaler, sess, is_train = True):
 
             mape = np.mean( np.divide(abs(np.subtract(y_pre_list, y_real_list)), y_real_list))
             rmse = np.sqrt(np.mean(np.subtract(y_pre_list, y_real_list) ** 2))
-
             all_mape.append(mape)
             all_rmse.append(rmse)
 
         all_loss.append(loss)
     return np.mean(all_loss), np.mean(all_mape), np.mean(all_rmse)
-    
 
-# ---------
 if __name__ == '__main__':
 
     # build model
@@ -56,31 +55,34 @@ if __name__ == '__main__':
     writer = tf.summary.FileWriter('graphs', sess.graph)
 
     # data process
+    print('Processing data...')
     dataset = ds_handler.get_dataset()
     y_scaler = dataset[-1, -1, 0]
     end_index = int((len(dataset[-1]) - 1) * 0.9)
     train_ds = dataset[-1, : end_index]
     valid_ds = dataset[-1, end_index - (1 + config.n) * config.T : -1]
 
+    train_batch_data = ds_handler.get_all_batch_data(train_ds)
+    valid_batch_data = ds_handler.get_all_batch_data(valid_ds)
     # run model
     if is_train:
         sess.run(tf.global_variables_initializer())
 
         last_loss = 100.0
-        best_valid_res = (100.0, 0)
+        best_valid_rmse = (100.0, 0)
         epochs = 1000
+
         print('Start training...')
         for i in range(epochs):
-            batch_data = ds_handler.get_batch_data(train_ds)
-            loss, _, _ = run_one_epoch(model, batch_data, y_scaler, sess, True)
-            print('Epoch', i, 'Train Loss:', loss)
+            start_t = time.time()
+            loss, _, _ = run_one_epoch(model, train_batch_data, y_scaler, sess, True)
+            print('Epoch', i, 'Train Loss:', loss, 'Cost time(min):', (time.time() - start_t) / 60)
             if abs(last_loss - loss) < RMSE_STOP_THRESHOLD:
                 break
             last_loss = loss
 
             if i % 10 == 0:
-                batch_data = ds_handler.get_batch_data(valid_ds)
-                loss, mape, rmse = run_one_epoch(model, batch_data, y_scaler, sess, False)
+                loss, mape, rmse = run_one_epoch(model, valid_batch_data, y_scaler, sess, False)
                 print('Valid Loss:', loss, 'MAPE(%):', mape * 100, 'RMSE:', rmse)
                 if best_valid_rmse[0] > rmse:
                     best_valid_rmse = (rmse, i)
@@ -88,6 +90,5 @@ if __name__ == '__main__':
                     saver.save(sess, model_path)
     else:
         saver.restore(sess, model_path)
-        batch_data = ds_handler.get_batch_data(valid_ds)
-        loss, mape, rmse = run_one_epoch(model, batch_data, y_scaler, sess, False)
+        loss, mape, rmse = run_one_epoch(model, valid_batch_data, y_scaler, sess, False)
         print('Valid Loss:', loss, 'MAPE(%):', mape * 100, 'RMSE:', rmse)  

@@ -15,7 +15,7 @@ class NasdaqConfig:
 
     lr = 0.001
 
-    batch_size = 10
+    batch_size = 100
 
     is_scaled = True
     feature_range = (0, 10)

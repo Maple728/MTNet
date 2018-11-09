@@ -64,6 +64,13 @@ class NasdaqDataset:
                 yield x, q, y
 
                 batch_data = []
+    def get_all_batch_data(self, data):
+        all_batch_data = []
+        batch_data = self.get_batch_data(data)
+        for ds in batch_data:
+            all_batch_data.append(ds)
+        return all_batch_data
+
 
 class TaxiNYDataset:
     name = 'TaxiNY'
