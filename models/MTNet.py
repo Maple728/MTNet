@@ -12,37 +12,14 @@ class MTNet:
             output_keep_prob = tf.placeholder(tf.float32)
 
             # ------- no-linear component----------------
-
-            #n * <batch_size, en_rnn_hidden_sizes>
-            # m_is = []
-            # c_is = []
-            # for i in range(self.config.n):
-            #     m_i = self.__encoder(X[:, i], scope = 'm')
-            #     m_is.append(m_i)
-            #
-            #     c_i = self.__encoder(X[:, i], scope = 'c')
-            #     c_is.append(c_i)
-            m_is = tf.TensorArray(dtype = tf.float32, size = self.config.n)
-            _, output = tf.while_loop(lambda i, _: tf.less(i, config.n),
-                                              lambda i, output_ta: (i + 1, output_ta.write(i, self.__encoder(X[:, i], scope = 'm'))),
-                                              loop_vars = [0, m_is])
-            m_is = output.stack()
-
-            c_is = tf.TensorArray(dtype=tf.float32, size = self.config.n)
-            _, output = tf.while_loop(lambda i, _: tf.less(i, config.n),
-                                              lambda i, output_ta: (i + 1, output_ta.write(i, self.__encoder(X[:, i], scope = 'c'))),
-                                              loop_vars = [0, c_is])
-            c_is = output.stack()
             # <batch_size, n, en_rnn_hidden_sizes>
-            m_is = tf.transpose(m_is, perm = [1, 0, 2])
-            c_is = tf.transpose(c_is, perm = [1, 0, 2])
-            
-            # <batch_size, en_rnn_hidden_sizes>
-            u = self.__encoder(Q, scope = 'in')
+            m_is = self.__encoder(X, self.config.n, scope = 'm')
+            c_is = self.__encoder(X, self.config.n, scope = 'c')
+            # <batch_size, 1, en_rnn_hidden_sizes>
+            u = self.__encoder(tf.reshape(Q, shape = [-1, 1, self.config.T, self.config.D]), 1, scope = 'in')
 
-            p_is = tf.matmul(m_is, tf.expand_dims(u, -1 ))
+            p_is = tf.matmul(m_is, tf.transpose(u, perm = [0, 2, 1]))
             p_is = tf.squeeze(p_is, axis = [-1])
-            
             p_is = tf.nn.softmax(p_is)
             # <batch_size, n, 1>
             p_is = tf.expand_dims(p_is, -1)
@@ -55,7 +32,7 @@ class MTNet:
             pred_b = tf.get_variable('pred_b', shape = [self.config.D],
                                      dtype = tf.float32, initializer = tf.constant_initializer(0.1))
             
-            pred_x = tf.concat([o_is, tf.expand_dims(u, -2)], axis = 1)
+            pred_x = tf.concat([o_is, u], axis = 1)
             pred_x = tf.reshape(pred_x, shape = [-1, self.config.en_rnn_hidden_sizes[-1] * (self.config.n + 1)])
 
             # <batch_size, D>
@@ -68,12 +45,11 @@ class MTNet:
                                             initializer = tf.truncated_normal_initializer(stddev = 0.1))
                 highway_b = tf.get_variable('highway_b', shape = [self.config.D], dtype = tf.float32,
                                             initializer = tf.constant_initializer(0.1))
-                y_pred_l = highway_b
-                for i in range(self.config.highway_window):
-                    if y_pred_l is None:
-                        y_pred_l = tf.matmul(Q[:, i], highway_ws[i]) + highway_b
-                    else:
-                        y_pred_l = y_pred_l + tf.matmul(Q[:, i], highway_ws[i])
+
+                y_pred_l = tf.matmul(Q[:, 0], highway_ws[0]) + highway_b
+                _, y_pred_l = tf.while_loop(lambda i, _ : tf.less(i, self.config.highway_window),
+                                            lambda i, acc : (i + 1, tf.matmul(Q[:, i], highway_ws[i]) + y_pred_l),
+                                            loop_vars = [1, y_pred_l])
 
                 y_pred += y_pred_l
 
@@ -88,39 +64,37 @@ class MTNet:
         self.loss = tf.losses.mean_squared_error(self.Y, y_pred)
         self.train_op = tf.train.AdamOptimizer(config.lr).minimize(self.loss)
 
-    def __encoder(self, input_x, strides = [1, 1, 1, 1], padding = 'VALID', scope = 'default'):
+    def __encoder(self, input_x, n, strides = [1, 1, 1, 1], padding = 'VALID', activation_func = tf.nn.relu,scope = 'default'):
         '''
-        :param input_x:  <batch_size, T, D>
+            Treat batch_size dimension and n dimension as one batch_size dimension (batch_size * n).
+        :param input_x:  <batch_size, n, T, D>
         :param strides:
         :param padding:
         :param scope:
-        :return: the embedded of the input_x
+        :return: the embedded of the input_x <batch_size, n, en_rnn_hidden_sizes>
         '''
+        # constant
         scope = 'Encoder_' + scope
-        batch_size = tf.shape(input_x)[0]
+        batch_size_new = self.config.batch_size * n
+        Tc = self.config.T - self.config.W + 1
 
-        # shape input_x 
-        input_x = tf.expand_dims(input_x, -1)
-        
+        # reshape input_x : <batch_size * n, T, D, 1>
+        input_x = tf.reshape(input_x, shape = [-1, self.config.T, self.config.D, 1])
+
         with tf.variable_scope(scope, reuse = tf.AUTO_REUSE):
-            # cnn
+            # cnn parameters
             w_conv1 = tf.get_variable('w_conv1', shape = [self.config.W, self.config.D, 1, self.config.en_conv_hidden_size], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
-            b_conv1 = tf.get_variable('b_conv1', shape = [ self.config.en_conv_hidden_size ], dtype = tf.float32, initializer = tf.constant_initializer(0.1))
-            
-            h_conv1 = tf.nn.conv2d(input_x, w_conv1, strides, padding = padding) + b_conv1
+            b_conv1 = tf.get_variable('b_conv1', shape = [self.config.en_conv_hidden_size], dtype = tf.float32, initializer = tf.constant_initializer(0.1))
 
-            # Tc = T - W + 1
-            # <batch_size, Tc, en_conv_hidden_size>
-            h_conv1 = tf.nn.relu(h_conv1)
-            Tc = self.config.T - self.config.W + 1
+            # <batch_size_new, Tc, 1, en_conv_hidden_size>
+            h_conv1 = tf.nn.conv2d(input_x, w_conv1, strides, padding = padding) + b_conv1
 
             # tmporal attention layer and gru layer
 
             # rnn inputs
-            
-            # <Tc, batch_size, 1, en_conv_hidden_size>
+            # <Tc, batch_size_new, 1, en_conv_hidden_size>
             rnn_input = tf.expand_dims( tf.transpose(h_conv1[:, :, 0, :], perm = [1, 0, 2]), -2)
-            # <en_conv_hidden_size, batch_size, Tc>
+            # <en_conv_hidden_size, batch_size_new, Tc>
             attr_input = tf.transpose(h_conv1[:, :, 0, :], perm = [2, 0, 1])
 
             # rnns
@@ -137,7 +111,8 @@ class MTNet:
                 rnns = rnns[0]
 
             # attention layer
-            h_state = rnns.zero_state(batch_size, tf.float32)
+            # <batch_size_new, en_rnn_hidden_sizes>
+            h_state = rnns.zero_state(batch_size_new, tf.float32)
             
             # attention weights
             attr_v = tf.get_variable('attr_v', shape = [Tc, 1], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
@@ -148,14 +123,14 @@ class MTNet:
                 # h(t-1) dot attr_w
                 h_part = tf.matmul(h_state, attr_w)
 
-                # en_conv_hidden_size * <batch_size, 1>
+                # en_conv_hidden_size * <batch_size_new, 1>
                 e_ks = tf.TensorArray(tf.float32, self.config.en_conv_hidden_size)
                 _, output = tf.while_loop(lambda i, _ : tf.less(i, self.config.en_conv_hidden_size),
                                           lambda i, output_ta : (i + 1, output_ta.write(i, tf.matmul(tf.tanh( h_part + tf.matmul(attr_input[i], attr_u) ), attr_v))),
                                           [0, e_ks])
-                e_ks = output.stack()
-                # <batch_size, en_conv_hidden_size, 1>
-                e_ks = tf.transpose(e_ks, perm = [1, 0, 2])
+                # <batch_size_new, en_conv_hidden_size, 1>
+                e_ks = tf.transpose(output.stack(), perm = [1, 0, 2])
+
                 e_ks = tf.reshape(e_ks, shape = [-1, self.config.en_conv_hidden_size])
                 # <batch_size, en_conv_hidden_size>
                 a_ks = tf.nn.softmax(e_ks)
@@ -167,7 +142,7 @@ class MTNet:
                 h_state = rnns(x_t, h_state)
                 h_state = h_state[0]
                 
-            return h_state
+            return tf.reshape(h_state, shape = [-1, n, self.config.en_rnn_hidden_sizes[-1]])
 
     def train(self, one_batch, sess):
         _, loss, pred = sess.run([self.train_op, self.loss, self.y_pred], feed_dict = {self.X : one_batch[0],

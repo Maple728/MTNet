@@ -2,16 +2,26 @@ from models.MTNet import *
 from configs.config import *
 from preprocess.get_data import *
 
+from functools import reduce
+from operator import mul
+
 import numpy as np
 import tensorflow as tf
 import time
 
 is_train = True
 model_path = './checkpoints/mtnet.ckpt'
-RMSE_STOP_THRESHOLD = 0.0001
+RMSE_STOP_THRESHOLD = 0.000000001
 
 config = NasdaqConfig
 ds_handler = NasdaqDataset(config)
+
+def get_num_params():
+    num_params = 0
+    for variable in tf.trainable_variables():
+        shape = variable.get_shape()
+        num_params += reduce(mul, [dim.value for dim in shape], 1)
+    return num_params
 
 def run_one_epoch(model, batch_data, y_scaler, sess, is_train = True):
     if is_train :
@@ -21,24 +31,23 @@ def run_one_epoch(model, batch_data, y_scaler, sess, is_train = True):
 
     all_loss = []
     all_mape = []
-    all_rmse = []    
+    all_rmse = []
     for ds in batch_data:
         loss, pred = run_func(ds, sess)
 
         # # un-norm the real value
-        if is_train is False:
-            y_pre_list = []
-            y_real_list = []
+        y_pre_list = []
+        y_real_list = []
 
-            for j in range(len(ds[-1])):
-                if model.config.is_scaled:
-                    y_pre_list.append(y_scaler.inverse_transform([ pred[j] ]))
-                    y_real_list.append(y_scaler.inverse_transform([ ds[2][j] ]))
+        for j in range(len(ds[-1])):
+            if model.config.is_scaled:
+                y_pre_list.append(y_scaler.inverse_transform([ pred[j] ]))
+                y_real_list.append(y_scaler.inverse_transform([ ds[2][j] ]))
 
-            mape = np.mean( np.divide(abs(np.subtract(y_pre_list, y_real_list)), y_real_list))
-            rmse = np.sqrt(np.mean(np.subtract(y_pre_list, y_real_list) ** 2))
-            all_mape.append(mape)
-            all_rmse.append(rmse)
+        mape = np.mean( np.divide(abs(np.subtract(y_pre_list, y_real_list)), y_real_list))
+        rmse = np.sqrt(np.mean(np.subtract(y_pre_list, y_real_list) ** 2))
+        all_mape.append(mape)
+        all_rmse.append(rmse)
 
         all_loss.append(loss)
     return np.mean(all_loss), np.mean(all_mape), np.mean(all_rmse)
@@ -67,7 +76,7 @@ if __name__ == '__main__':
     # run model
     if is_train:
         sess.run(tf.global_variables_initializer())
-
+        print('Trainable parameter count:', get_num_params())
         last_loss = 100.0
         best_valid_rmse = (100.0, 0)
         epochs = 1000
@@ -75,8 +84,8 @@ if __name__ == '__main__':
         print('Start training...')
         for i in range(epochs):
             start_t = time.time()
-            loss, _, _ = run_one_epoch(model, train_batch_data, y_scaler, sess, True)
-            print('Epoch', i, 'Train Loss:', loss, 'Cost time(min):', (time.time() - start_t) / 60)
+            loss, mape, rmse = run_one_epoch(model, train_batch_data, y_scaler, sess, True)
+            print('Epoch', i, 'Train Loss:', loss, 'MAPE(%):', mape * 100, 'RMSE:', rmse, 'Cost time(min):', (time.time() - start_t) / 60)
             if abs(last_loss - loss) < RMSE_STOP_THRESHOLD:
                 break
             last_loss = loss

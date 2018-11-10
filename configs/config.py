@@ -7,8 +7,8 @@ class NasdaqConfig:
     highway_window = 6 # the window size of ar model
     horizon = 1 # the horizon of predicted value
 
-    en_conv_hidden_size = 24
-    en_rnn_hidden_sizes = [24]
+    en_conv_hidden_size = 64
+    en_rnn_hidden_sizes = [64]
 
     input_keep_prob = 1.0
     output_keep_prob = 1.0
@@ -18,4 +18,4 @@ class NasdaqConfig:
     batch_size = 100
 
     is_scaled = True
-    feature_range = (0, 10)
+    feature_range = (0, 1)
