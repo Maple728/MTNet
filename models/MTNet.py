@@ -6,7 +6,7 @@ class MTNet:
         with tf.variable_scope(scope, reuse = False):
             X = tf.placeholder(tf.float32, shape = [None, self.config.n, self.config.T, self.config.D])
             Q = tf.placeholder(tf.float32, shape = [None, self.config.T, self.config.D])
-            Y = tf.placeholder(tf.float32, shape = [None, self.config.D])
+            Y = tf.placeholder(tf.float32, shape = [None, self.config.K])
 
             input_keep_prob = tf.placeholder(tf.float32)
             output_keep_prob = tf.placeholder(tf.float32)
@@ -27,9 +27,9 @@ class MTNet:
             # <batch_size, n, en_rnn_hidden_sizes> = <batch_size, n, en_rnn_hidden_sizes> * <batch_size, n, 1>
             o_is = tf.multiply(c_is, p_is)
 
-            pred_w = tf.get_variable('pred_w', shape = [self.config.en_rnn_hidden_sizes[-1] * (self.config.n + 1), self.config.D],
+            pred_w = tf.get_variable('pred_w', shape = [self.config.en_rnn_hidden_sizes[-1] * (self.config.n + 1), self.config.K],
                                      dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
-            pred_b = tf.get_variable('pred_b', shape = [self.config.D],
+            pred_b = tf.get_variable('pred_b', shape = [self.config.K],
                                      dtype = tf.float32, initializer = tf.constant_initializer(0.1))
             
             pred_x = tf.concat([o_is, u], axis = 1)
@@ -40,10 +40,10 @@ class MTNet:
 
             # ------------ ar component ------------
             if self.config.highway_window > 0:
-                highway_ws = tf.get_variable('highway_ws', shape = [self.config.highway_window, self.config.D, self.config.D],
+                highway_ws = tf.get_variable('highway_ws', shape = [self.config.highway_window, self.config.D, self.config.K],
                                             dtype = tf.float32,
                                             initializer = tf.truncated_normal_initializer(stddev = 0.1))
-                highway_b = tf.get_variable('highway_b', shape = [self.config.D], dtype = tf.float32,
+                highway_b = tf.get_variable('highway_b', shape = [self.config.K], dtype = tf.float32,
                                             initializer = tf.constant_initializer(0.1))
 
                 y_pred_l = tf.matmul(Q[:, 0], highway_ws[0]) + highway_b
@@ -100,10 +100,11 @@ class MTNet:
             # rnns
             rnns = [tf.nn.rnn_cell.GRUCell(h_size, activation = tf.nn.relu) for h_size in self.config.en_rnn_hidden_sizes]
             # dropout
-            rnns = [tf.nn.rnn_cell.DropoutWrapper(rnn,
-                                                  input_keep_prob = self.config.input_keep_prob,
-                                                  output_keep_prob = self.config.output_keep_prob)
-                    for rnn in rnns]
+            if self.config.input_keep_prob < 1 or self.config.output_keep_prob < 1:
+                rnns = [tf.nn.rnn_cell.DropoutWrapper(rnn,
+                                                      input_keep_prob = self.config.input_keep_prob,
+                                                      output_keep_prob = self.config.output_keep_prob)
+                        for rnn in rnns]
 
             if len(rnns) > 1:
                 rnns = tf.nn.rnn_cell.MultiRNNCell(rnns)
@@ -112,14 +113,23 @@ class MTNet:
 
             # attention layer
             # <batch_size_new, en_rnn_hidden_sizes>
-            h_state = rnns.zero_state(batch_size_new, tf.float32)
+            s_state = rnns.zero_state(batch_size_new, tf.float32)
+            if len(self.config.en_rnn_hidden_sizes) > 1:
+                h_state = s_state[-1]
+            else:
+                h_state = s_state
             
             # attention weights
-            attr_v = tf.get_variable('attr_v', shape = [Tc, 1], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
-            attr_w = tf.get_variable('attr_w', shape = [self.config.en_conv_hidden_size, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
-            attr_u = tf.get_variable('attr_u', shape = [Tc, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
+            # attr_v = tf.get_variable('attr_v', shape = [Tc, 1], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
+            # attr_w = tf.get_variable('attr_w', shape = [self.config.en_conv_hidden_size, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
+            # attr_u = tf.get_variable('attr_u', shape = [Tc, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
+
 
             for t in range(Tc):
+                attr_v = tf.Variable(tf.truncated_normal(shape=[Tc, 1], stddev=0.1, dtype=tf.float32), name='attr_v')
+                attr_w = tf.Variable(tf.truncated_normal(shape=[self.config.en_rnn_hidden_sizes[-1], Tc], stddev=0.1, dtype=tf.float32), name='attr_w')
+                attr_u = tf.Variable(tf.truncated_normal(shape=[Tc, Tc], stddev=0.1, dtype=tf.float32), name='attr_u')
+
                 # h(t-1) dot attr_w
                 h_part = tf.matmul(h_state, attr_w)
 
@@ -139,8 +149,7 @@ class MTNet:
                 # <batch_size, en_conv_hidden_size>
                 x_t = tf.reshape(x_t, shape = [-1, self.config.en_conv_hidden_size])
 
-                h_state = rnns(x_t, h_state)
-                h_state = h_state[0]
+                h_state, s_state = rnns(x_t, s_state)
                 
             return tf.reshape(h_state, shape = [-1, n, self.config.en_rnn_hidden_sizes[-1]])
 
