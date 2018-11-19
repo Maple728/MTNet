@@ -23,6 +23,9 @@ class MTNet:
             p_is = tf.nn.softmax(p_is)
             # <batch_size, n, 1>
             p_is = tf.expand_dims(p_is, -1)
+            # for summary
+            p_is_mean, _ = tf.metrics.mean_tensor(p_is, updates_collections = 'summary_ops', name = 'p_is')
+            tf.summary.histogram('p_is', p_is_mean)
 
             # <batch_size, n, en_rnn_hidden_sizes> = <batch_size, n, en_rnn_hidden_sizes> * <batch_size, n, 1>
             o_is = tf.multiply(c_is, p_is)
@@ -39,19 +42,35 @@ class MTNet:
             y_pred = tf.matmul(pred_x, pred_w) + pred_b
 
             # ------------ ar component ------------
-            if self.config.highway_window > 0:
-                highway_ws = tf.get_variable('highway_ws', shape = [self.config.highway_window, self.config.D, self.config.K],
-                                            dtype = tf.float32,
-                                            initializer = tf.truncated_normal_initializer(stddev = 0.1))
-                highway_b = tf.get_variable('highway_b', shape = [self.config.K], dtype = tf.float32,
-                                            initializer = tf.constant_initializer(0.1))
+            with tf.variable_scope('AutoRegression'):
+                if self.config.highway_window > 0:
+                    highway_ws = tf.get_variable('highway_ws', shape = [self.config.highway_window, self.config.D, self.config.K],
+                                                dtype = tf.float32,
+                                                initializer = tf.truncated_normal_initializer(stddev = 0.1))
+                    highway_b = tf.get_variable('highway_b', shape = [self.config.K], dtype = tf.float32,
+                                                initializer = tf.constant_initializer(0.1))
 
-                y_pred_l = tf.matmul(Q[:, 0], highway_ws[0]) + highway_b
-                _, y_pred_l = tf.while_loop(lambda i, _ : tf.less(i, self.config.highway_window),
-                                            lambda i, acc : (i + 1, tf.matmul(Q[:, i], highway_ws[i]) + y_pred_l),
-                                            loop_vars = [1, y_pred_l])
+                    y_pred_l = tf.matmul(Q[:, 0], highway_ws[0]) + highway_b
+                    _, y_pred_l = tf.while_loop(lambda i, _ : tf.less(i, self.config.highway_window),
+                                                lambda i, acc : (i + 1, tf.matmul(Q[:, i], highway_ws[i]) + y_pred_l),
+                                                loop_vars = [1, y_pred_l])
 
-                y_pred += y_pred_l
+                    y_pred += y_pred_l
+
+
+        # metrics summary
+        #mae_loss, _ = tf.metrics.mean_absolute_error(Y, y_pred, updates_collections = 'summary_ops', name = 'mae_metric')
+        #tf.summary.scalar('mae_loss', mae_loss)
+
+        #rmse_loss, _ = tf.metrics.root_mean_squared_error(Y, y_pred, updates_collections = 'summary_ops', name = 'rmse_metric')
+        #tf.summary.scalar("mse_loss", rmse_loss)
+
+        statistics_vars = tf.get_collection(tf.GraphKeys.METRIC_VARIABLES)
+        statistics_vars_initializer = tf.variables_initializer(var_list = statistics_vars)
+
+        loss = tf.losses.absolute_difference(Y, y_pred)
+        with tf.name_scope('Train'):
+            train_op = tf.train.AdamOptimizer(config.lr).minimize(loss)
 
         # assignment
         self.X = X
@@ -59,10 +78,13 @@ class MTNet:
         self.Y = Y
         self.input_keep_prob = input_keep_prob
         self.output_keep_prob = output_keep_prob
-
         self.y_pred = y_pred
-        self.loss = tf.losses.mean_squared_error(self.Y, y_pred)
-        self.train_op = tf.train.AdamOptimizer(config.lr).minimize(self.loss)
+        self.loss = loss
+        self.train_op = train_op
+
+        self.reset_statistics_vars = statistics_vars_initializer
+        self.merged_summary = tf.summary.merge_all()
+        self.summary_updates = tf.get_collection('summary_ops')
 
     def __encoder(self, input_x, n, strides = [1, 1, 1, 1], padding = 'VALID', activation_func = tf.nn.relu,scope = 'default'):
         '''
@@ -120,15 +142,15 @@ class MTNet:
                 h_state = s_state
             
             # attention weights
-            # attr_v = tf.get_variable('attr_v', shape = [Tc, 1], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
-            # attr_w = tf.get_variable('attr_w', shape = [self.config.en_conv_hidden_size, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
-            # attr_u = tf.get_variable('attr_u', shape = [Tc, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
+            attr_v = tf.get_variable('attr_v', shape = [Tc, 1], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
+            attr_w = tf.get_variable('attr_w', shape = [self.config.en_conv_hidden_size, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
+            attr_u = tf.get_variable('attr_u', shape = [Tc, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
 
 
             for t in range(Tc):
-                attr_v = tf.Variable(tf.truncated_normal(shape=[Tc, 1], stddev=0.1, dtype=tf.float32), name='attr_v')
-                attr_w = tf.Variable(tf.truncated_normal(shape=[self.config.en_rnn_hidden_sizes[-1], Tc], stddev=0.1, dtype=tf.float32), name='attr_w')
-                attr_u = tf.Variable(tf.truncated_normal(shape=[Tc, Tc], stddev=0.1, dtype=tf.float32), name='attr_u')
+                # attr_v = tf.Variable(tf.truncated_normal(shape=[Tc, 1], stddev=0.1, dtype=tf.float32), name='attr_v')
+                # attr_w = tf.Variable(tf.truncated_normal(shape=[self.config.en_rnn_hidden_sizes[-1], Tc], stddev=0.1, dtype=tf.float32), name='attr_w')
+                # attr_u = tf.Variable(tf.truncated_normal(shape=[Tc, Tc], stddev=0.1, dtype=tf.float32), name='attr_u')
 
                 # h(t-1) dot attr_w
                 h_part = tf.matmul(h_state, attr_w)
@@ -145,6 +167,11 @@ class MTNet:
                 # <batch_size, en_conv_hidden_size>
                 a_ks = tf.nn.softmax(e_ks)
 
+                # for summary
+                if t == Tc - 1:
+                    a_ks_mean, _ = tf.metrics.mean_tensor(a_ks[0], updates_collections='summary_ops', name='a_ks')
+                    tf.summary.histogram('a_ks', a_ks_mean)
+
                 x_t = tf.matmul( rnn_input[t], tf.matrix_diag(a_ks))
                 # <batch_size, en_conv_hidden_size>
                 x_t = tf.reshape(x_t, shape = [-1, self.config.en_conv_hidden_size])
@@ -154,17 +181,28 @@ class MTNet:
             return tf.reshape(h_state, shape = [-1, n, self.config.en_rnn_hidden_sizes[-1]])
 
     def train(self, one_batch, sess):
-        _, loss, pred = sess.run([self.train_op, self.loss, self.y_pred], feed_dict = {self.X : one_batch[0],
-                                                                                       self.Q : one_batch[1],
-                                                                                       self.Y : one_batch[2],
-                                                                                       self.input_keep_prob : self.config.input_keep_prob,
-                                                                                       self.output_keep_prob : self.config.output_keep_prob})
+        fd = self.get_feed_dict(one_batch, True)
+        _, loss, pred = sess.run([self.train_op, self.loss, self.y_pred], feed_dict = fd)
+        sess.run(self.summary_updates, feed_dict = fd)
         return loss, pred
 
     def predict(self, one_batch, sess):
-        loss, pred = sess.run([self.loss, self.y_pred], feed_dict = {self.X : one_batch[0],
-                                                                     self.Q : one_batch[1],
-                                                                     self.Y : one_batch[2],
-                                                                     self.input_keep_prob : 1.0,
-                                                                     self.output_keep_prob : 1.0})
+        fd = self.get_feed_dict(one_batch, False)
+        loss, pred = sess.run([self.loss, self.y_pred], feed_dict = fd)
+        sess.run(self.summary_updates, feed_dict = fd)
         return loss, pred
+
+    def get_feed_dict(self, one_batch, is_train):
+        if is_train:
+            fd = {self.X : one_batch[0],
+                  self.Q : one_batch[1],
+                  self.Y : one_batch[2],
+                  self.input_keep_prob : self.config.input_keep_prob,
+                  self.output_keep_prob : self.config.output_keep_prob}
+        else:
+            fd = {self.X : one_batch[0],
+                  self.Q : one_batch[1],
+                  self.Y : one_batch[2],
+                  self.input_keep_prob : 1.0,
+                  self.output_keep_prob :1.0}
+        return fd;

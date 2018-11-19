@@ -5,17 +5,20 @@ from preprocess.get_data import *
 from functools import reduce
 from operator import mul
 import time
+import os
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 
-config = TaxiNYConfig
-ds_handler = TaxiNYDataset(config)
+CONFIG = BJpmConfig
+DS_HANDLER = BJPMDataset
 
 is_train = True
-model_path = './checkpoints/%s.ckpt' % ds_handler.name
+
+MODEL_DIR = os.path.join('logs', 'checkpoints')
+LOG_DIR = os.path.join('logs', 'graphs')
 
 def get_num_params():
     num_params = 0
@@ -24,7 +27,21 @@ def get_num_params():
         num_params += reduce(mul, [dim.value for dim in shape], 1)
     return num_params
 
-def run_one_epoch(model, batch_data, sess, is_train = True, display = False):
+def make_config_string(config):
+    return "T%s_W%s_n%s_window%s_dropin%s_dropout%s_hid%s_hor%s_lr%s" % \
+           (config.T, config.W, config.n, config.highway_window, config.input_keep_prob, config.output_keep_prob,
+            config.en_conv_hidden_size, config.horizon, config.lr)
+
+def make_log_dir(config):
+    return os.path.join(LOG_DIR, make_config_string(config))
+
+def make_model_path(config):
+    return os.path.join(MODEL_DIR, make_config_string(config), 'mtnet.ckpt')
+
+def run_one_epoch(sess, model, batch_data, summary_writer, ds_handler, epoch_num, is_train = True):
+    # reset statistics variables
+    sess.run(model.reset_statistics_vars)
+
     if is_train :
         run_func = model.train
     else:
@@ -42,64 +59,81 @@ def run_one_epoch(model, batch_data, sess, is_train = True, display = False):
         loss_list.append(loss)
 
     # inverse norm
-    y_pred_list = np.reshape(y_pred_list, [-1, config.K])
-    y_real_list = np.reshape(y_real_list, [-1, config.K])
+    y_pred_list = np.reshape(y_pred_list, [-1, model.config.K])
+    y_real_list = np.reshape(y_real_list, [-1, model.config.K])
 
     y_pred_list = ds_handler.inverse_transform(y_pred_list)
     y_real_list = ds_handler.inverse_transform(y_real_list)
 
-    if display:
-        plt.plot(y_pred_list.flatten(), 'b')
-        plt.plot(y_real_list.flatten(), 'r')
-        plt.show()
-
-    mae = abs(np.subtract(y_pred_list, y_real_list))
+    # real value loss
+    loss = np.mean(loss_list)
+    mae = np.mean(abs(np.subtract(y_pred_list, y_real_list)))
     rmse = np.sqrt(np.mean(np.subtract(y_pred_list, y_real_list) ** 2))
 
-    return np.mean(loss_list), np.mean(mae), np.mean(rmse)
+    # summary
+    # model's summary
+    summary = sess.run(model.merged_summary)
+    summary_writer.add_summary(summary, epoch_num)
+    # other summary
+    real_mae_summary = tf.Summary()
+    real_mae_summary.value.add(tag='real_mae', simple_value=mae)
+    summary_writer.add_summary(real_mae_summary, epoch_num)
 
-if __name__ == '__main__':
+    real_rmse_summary = tf.Summary()
+    real_rmse_summary.value.add(tag='real_rmse', simple_value=rmse)
+    summary_writer.add_summary(real_rmse_summary, epoch_num)
 
+    return loss, mae, rmse
+
+def run_one_config(config):
+    epochs = 300
+
+    log_path = make_log_dir(config)
+    model_path = make_model_path(config)
     # build model
-    sess = tf.Session()
-    model = MTNet(config)
-    saver = tf.train.Saver()
+    with tf.Session() as sess:
+        model = MTNet(config)
+        saver = tf.train.Saver()
 
-    # tensor board
-    merged = tf.summary.merge_all()
-    writer = tf.summary.FileWriter('graphs', sess.graph)
+        # data process
+        ds_handler = DS_HANDLER(config)
+        train_batch_data = ds_handler.get_all_batch_data(config, 'T')
+        valid_batch_data = ds_handler.get_all_batch_data(config, 'E')
 
-    # data process
-    print('Processing data...')
+        # tensor board
+        train_writer = tf.summary.FileWriter(os.path.join(log_path, 'train'), sess.graph)
+        test_writer = tf.summary.FileWriter(os.path.join(log_path, 'test'))
 
-    train_batch_data = ds_handler.get_all_batch_data('T')
-    valid_batch_data = ds_handler.get_all_batch_data('V')
-
-    # run model
-    if is_train:
-        sess.run(tf.global_variables_initializer())
+        print('----------Train Config:', make_config_string(config), '. Total epochs:', epochs)
         print('Trainable parameter count:', get_num_params())
-        print('The model saved path:', model_path)
+
+        # Actually run
+        sess.run(tf.global_variables_initializer())
 
         best_valid_rmse = (100.0, 0)
-        epochs = 500
 
-        print('Start training...')
         for i in range(epochs):
-            start_t = time.time()
-            loss, mape, rmse = run_one_epoch(model, train_batch_data, sess, True)
-            print('Epoch', i, 'Train Loss:', loss, 'MAPE(%):', mape * 100, 'RMSE:', rmse, 'Cost time(min):', (time.time() - start_t) / 60)
+            loss, mae, rmse = run_one_epoch(sess, model, train_batch_data, train_writer, ds_handler, i, True)
 
-            if i % 10 == 0:
-                loss, mape, rmse = run_one_epoch(model, valid_batch_data, sess, False, display = False)
-                print('Valid Loss:', loss, 'MAPE(%):', mape * 100, 'RMSE:', rmse)
+            if i % 10 == 9:
+                loss, mae, rmse = run_one_epoch(sess, model, valid_batch_data, test_writer, ds_handler, i, False)
                 if best_valid_rmse[0] > rmse:
                     best_valid_rmse = (rmse, i)
                     # save model
                     saver.save(sess, model_path)
-        print('Best score in epoch:', best_valid_rmse[1], ' RMSE:', best_valid_rmse[0])
+                    print('Epoch', i, 'Valid Loss:', loss, 'MAE:', mae, 'RMSE:', rmse)
 
-    else:
-        saver.restore(sess, model_path)
-        loss, mape, rmse = run_one_epoch(model, valid_batch_data, sess, False)
-        print('Valid Loss:', loss, 'MAPE(%):', mape * 100, 'RMSE:', rmse)  
+        print('---------Best score in epoch:', best_valid_rmse[1], ' RMSE:', best_valid_rmse[0])
+
+    # free default graph
+    tf.reset_default_graph()
+
+
+if __name__ == '__main__':
+    config = CONFIG()
+    for input_keep_prob in [0.8, 1.0]:
+        config.input_keep_prob = input_keep_prob
+        for highway_window in [1, 3]:
+            config.highway_window = highway_window
+
+            run_one_config(config)
