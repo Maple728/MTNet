@@ -15,7 +15,8 @@ class Dataset(object):
     '''
     SACLED_FEATURE_RANGE = (0, 1)
 
-    def __init__(self):
+    def __init__(self, config):
+        self.config = config
         # get dataset
         self.raw_dataset = self.get_dataset()
         # get scaled dataset and sacler
@@ -43,16 +44,16 @@ class Dataset(object):
         :return:
         '''
         i = len(records)
-        one_record_len = config.D * config.T * (config.n + 2)
+        one_record_len = config.D * config.T * (config.n + 1) + config.D
         while i > 0:
-            start_index = i - config.batch_size * one_record_len
+            start_index = i - config.batch_size
             if start_index < 0:
                 break
 
             batch_data = records[start_index : i, :]
             x = np.reshape(batch_data[:, : config.T * config.n * config.D], [-1, config.n, config.T, config.D])
             q = np.reshape(batch_data[:, config.T * config.n * config.D : -config.D], [-1, config.T, config.D])
-            y = np.reshape(batch_data[:, -config.D], [-1, config.D])
+            y = np.reshape(batch_data[:, -config.D :], [-1, config.D])
             yield x, q, y
 
             i = start_index
@@ -62,7 +63,6 @@ class Dataset(object):
         :param data: <length, columns>
         :return: a tuple (scaled_data<same shape as input>, scaler)
         '''
-        config = self.config
         scaler = MinMaxScaler(self.SACLED_FEATURE_RANGE)
         data = scaler.fit_transform(data.tolist())
 
@@ -76,7 +76,6 @@ class Dataset(object):
         '''
         y_scaler = self.scaler
 
-        y_scaled = np.reshape(y_scaled, [-1, self.config.K])
         real_y = y_scaler.inverse_transform(y_scaled)
 
         return real_y
@@ -249,3 +248,26 @@ class BJPMDataset(Dataset):
 
         return np.reshape(real_y, origin_shape)
 
+class SolarEnergyDataset(Dataset):
+    name = 'SolarEnergy_2006'
+    data_filename = './datasets/solar_energy_2006_10min.csv'
+
+    def __init__(self, config):
+        Dataset.__init__(self, config)
+
+        self.train_ds, self.valid_ds, self.test_ds = self.divide_ds(config, [0.6, 0.8])
+        print('-Train dataset shape:', self.train_ds.shape)
+        print('-Valid dataset shape:', self.valid_ds.shape)
+        print('-Test dataset shape:', self.test_ds.shape)
+
+    def get_dataset(self):
+        '''
+        Get dataset <length, D>
+        :return: <length, D>
+        '''
+
+        records = pd.read_csv(self.data_filename)
+        data = np.array(records)
+
+        # <length, columns>
+        return data

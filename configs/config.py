@@ -32,8 +32,30 @@ class BJpmConfig:
 
         self.horizon = 6 # the horizon of predicted value
 
-        self.en_conv_hidden_size = 100
-        self.en_rnn_hidden_sizes = [100]  # last size is equal to en_conv_hidden_size
+        self.en_conv_hidden_size = 64
+        self.en_rnn_hidden_sizes = [64]  # last size is equal to en_conv_hidden_size
+
+        self.input_keep_prob = 0.8
+        self.output_keep_prob = 1.0
+
+        self.lr = 0.001
+        self.batch_size = 100
+
+class SolarEnergyConfig:
+
+    def __init__(self):
+        self.T = 6 # timestep
+        self.W = 3 # convolution window size (convolution filter height)`
+        self.n = 5 # the number of the long-term memory series
+        self.highway_window = 6  # the window size of ar model
+
+        self.D = 137  # input's variable dimension (convolution filter width)
+        self.K = 137 # output's variable dimension
+
+        self.horizon = 6 # the horizon of predicted value
+
+        self.en_conv_hidden_size = 64
+        self.en_rnn_hidden_sizes = [64]  # last size is equal to en_conv_hidden_size
 
         self.input_keep_prob = 0.8
         self.output_keep_prob = 1.0

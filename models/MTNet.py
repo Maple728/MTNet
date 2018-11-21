@@ -12,6 +12,7 @@ class MTNet:
             output_keep_prob = tf.placeholder(tf.float32)
 
             # ------- no-linear component----------------
+            last_rnn_hid_size = self.config.en_rnn_hidden_sizes[-1]
             # <batch_size, n, en_rnn_hidden_sizes>
             m_is = self.__encoder(X, self.config.n, scope = 'm')
             c_is = self.__encoder(X, self.config.n, scope = 'c')
@@ -30,13 +31,13 @@ class MTNet:
             # <batch_size, n, en_rnn_hidden_sizes> = <batch_size, n, en_rnn_hidden_sizes> * <batch_size, n, 1>
             o_is = tf.multiply(c_is, p_is)
 
-            pred_w = tf.get_variable('pred_w', shape = [self.config.en_rnn_hidden_sizes[-1] * (self.config.n + 1), self.config.K],
+            pred_w = tf.get_variable('pred_w', shape = [last_rnn_hid_size * (self.config.n + 1), self.config.K],
                                      dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
             pred_b = tf.get_variable('pred_b', shape = [self.config.K],
                                      dtype = tf.float32, initializer = tf.constant_initializer(0.1))
             
             pred_x = tf.concat([o_is, u], axis = 1)
-            pred_x = tf.reshape(pred_x, shape = [-1, self.config.en_rnn_hidden_sizes[-1] * (self.config.n + 1)])
+            pred_x = tf.reshape(pred_x, shape = [-1, last_rnn_hid_size * (self.config.n + 1)])
 
             # <batch_size, D>
             y_pred = tf.matmul(pred_x, pred_w) + pred_b
@@ -86,14 +87,14 @@ class MTNet:
         self.merged_summary = tf.summary.merge_all()
         self.summary_updates = tf.get_collection('summary_ops')
 
-    def __encoder(self, input_x, n, strides = [1, 1, 1, 1], padding = 'VALID', activation_func = tf.nn.relu,scope = 'default'):
+    def __encoder(self, input_x, n, strides = [1, 1, 1, 1], padding = 'VALID', activation_func = tf.nn.relu, scope = 'Encoder'):
         '''
             Treat batch_size dimension and n dimension as one batch_size dimension (batch_size * n).
         :param input_x:  <batch_size, n, T, D>
         :param strides:
         :param padding:
         :param scope:
-        :return: the embedded of the input_x <batch_size, n, en_rnn_hidden_sizes>
+        :return: the embedded of the input_x <batch_size, n, last_rnn_hid_size>
         '''
         # constant
         scope = 'Encoder_' + scope
@@ -105,11 +106,15 @@ class MTNet:
 
         with tf.variable_scope(scope, reuse = tf.AUTO_REUSE):
             # cnn parameters
-            w_conv1 = tf.get_variable('w_conv1', shape = [self.config.W, self.config.D, 1, self.config.en_conv_hidden_size], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
-            b_conv1 = tf.get_variable('b_conv1', shape = [self.config.en_conv_hidden_size], dtype = tf.float32, initializer = tf.constant_initializer(0.1))
+            with tf.variable_scope('CNN', reuse = tf.AUTO_REUSE):
+                w_conv1 = tf.get_variable('w_conv1', shape = [self.config.W, self.config.D, 1, self.config.en_conv_hidden_size], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
+                b_conv1 = tf.get_variable('b_conv1', shape = [self.config.en_conv_hidden_size], dtype = tf.float32, initializer = tf.constant_initializer(0.1))
 
-            # <batch_size_new, Tc, 1, en_conv_hidden_size>
-            h_conv1 = tf.nn.conv2d(input_x, w_conv1, strides, padding = padding) + b_conv1
+                # <batch_size_new, Tc, 1, en_conv_hidden_size>
+                h_conv1 = activation_func(tf.nn.conv2d(input_x, w_conv1, strides, padding = padding) + b_conv1)
+                if self.config.input_keep_prob < 1:
+                    h_conv1 = tf.nn.dropout(h_conv1, self.config.input_keep_prob)
+
 
             # tmporal attention layer and gru layer
 
@@ -120,7 +125,7 @@ class MTNet:
             attr_input = tf.transpose(h_conv1[:, :, 0, :], perm = [2, 0, 1])
 
             # rnns
-            rnns = [tf.nn.rnn_cell.GRUCell(h_size, activation = tf.nn.relu) for h_size in self.config.en_rnn_hidden_sizes]
+            rnns = [tf.nn.rnn_cell.GRUCell(h_size, activation = activation_func) for h_size in self.config.en_rnn_hidden_sizes]
             # dropout
             if self.config.input_keep_prob < 1 or self.config.output_keep_prob < 1:
                 rnns = [tf.nn.rnn_cell.DropoutWrapper(rnn,
