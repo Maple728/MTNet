@@ -134,8 +134,8 @@ class TaxiNYDataset(Dataset):
     name = 'TaxiNY_%s' %  time_interval
     data_filename = './datasets/grid_map_dict_%smin.pickle' % time_interval
 
-    def __init__(self):
-        Dataset.__init__(self)
+    def __init__(self, config):
+        Dataset.__init__(self, config)
 
         self.train_ds, self.valid_ds = self.divide_ds(self.dataset, [0.9])
         print('-Train dataset shape:', self.train_ds.shape)

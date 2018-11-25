@@ -4,13 +4,15 @@ from preprocess.get_data import *
 
 from functools import reduce
 from operator import mul
-import time
+import math
 import os
 
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
+
+# GPU setting
+# os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
 CONFIG = SolarEnergyConfig
 DS_HANDLER = SolarEnergyDataset
@@ -28,15 +30,18 @@ def get_num_params():
     return num_params
 
 def make_config_string(config):
-    return "T%s_W%s_n%s_hw%s_dropin%s_hid%s_hor%s_lr%s" % \
+    return "T%s_W%s_n%s_hw%s_dropin%s_cnn%s_rnn%s" % \
            (config.T, config.W, config.n, config.highway_window, config.input_keep_prob,
-            config.en_conv_hidden_size, config.horizon, config.lr)
+            config.en_conv_hidden_size, config.en_rnn_hidden_sizes)
 
 def make_log_dir(config, ds_handler):
-    return os.path.join(LOG_DIR, ds_handler.name, make_config_string(config))
+    return os.path.join(LOG_DIR, ds_handler.name, 'horizon' + str(config.horizon),make_config_string(config))
 
 def make_model_path(config, ds_handler):
-    return os.path.join(MODEL_DIR, ds_handler.name, make_config_string(config), 'mtnet.ckpt')
+    dir = os.path.join(MODEL_DIR, ds_handler.name, 'horizon' + str(config.horizon))
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    return os.path.join(dir, make_config_string(config), 'mtnet.ckpt')
 
 def calc_rse(y_real_list, y_pred_list):
     rse_numerator = np.sum(np.subtract(y_pred_list, y_real_list) ** 2)
@@ -49,7 +54,9 @@ def calc_corr(y_real_list, y_pred_list):
     y_pred_mean = np.mean(y_pred_list, axis = 0)
 
     numerator = np.sum((y_real_list - y_real_mean) * (y_pred_list - y_pred_mean), axis = 0)
-    denominator = np.sqrt(np.sum( ((y_real_list - y_real_mean) ** 2) * ((y_pred_list - y_pred_mean) ** 2), axis = 0))
+    denominator_real = np.sqrt(np.sum((y_real_list - y_real_mean) ** 2, axis = 0))
+    denominator_pred = np.sqrt(np.sum((y_pred_list - y_pred_mean) ** 2, axis = 0))
+    denominator = denominator_real * denominator_pred
     corr = np.mean(numerator / denominator)
 
     return corr
@@ -117,6 +124,12 @@ def run_one_epoch(sess, model, batch_data, summary_writer, ds_handler, epoch_num
 
 def run_one_config(config):
     epochs = 300
+
+    # learning rate decay
+    max_lr = 0.003
+    min_lr = 0.0001
+    decay_epochs = 60
+
     # build model
     with tf.Session() as sess:
         model = MTNet(config)
@@ -142,22 +155,28 @@ def run_one_config(config):
 
         best_score = float('inf')
 
-        for i in range(epochs):
-            loss, score1, score2 = run_one_epoch(sess, model, train_batch_data, train_writer, ds_handler, i, True)
-            if config.K > 1:
-                score1_name = 'CORR'
-                score2_name = 'RSE'
-            else:
-                score1_name = 'MAE'
-                score2_name = 'RMSE'
+        # indicate the score name
+        if config.K > 1:
+            score1_name = 'CORR'
+            score2_name = 'RSE'
+        else:
+            score1_name = 'MAE'
+            score2_name = 'RMSE'
 
+        for i in range(epochs):
+            # decay lr
+            config.lr = min_lr + (max_lr - min_lr) * math.exp(-i/decay_epochs)
+
+            # train one epoch
+            run_one_epoch(sess, model, train_batch_data, train_writer, ds_handler, i, True)
+            # evaluate
             if i % 10 == 0:
-                loss, mae, rmse = run_one_epoch(sess, model, valid_batch_data, test_writer, ds_handler, i, False)
+                loss, scope1, score2 = run_one_epoch(sess, model, valid_batch_data, test_writer, ds_handler, i, False)
                 if best_score > score2:
-                    best_valid_rmse = (rmse, i)
+                    best_score = score2
                     # save model
                     saver.save(sess, model_path)
-                    print('Epoch', i, 'Test Loss:', loss, score1_name,':', mae, score2_name, ':', rmse)
+                    print('Epoch', i, 'Test Loss:', loss, score1_name,':', scope1, score2_name, ':', score2)
 
         print('---------Best score:', score2_name, ':', best_score)
 
@@ -167,9 +186,9 @@ def run_one_config(config):
 
 if __name__ == '__main__':
     config = CONFIG()
-    for lr in [0.001, 0.0005]:
-        config.lr = lr
-        for W in [3, 5]:
-            config.W = W
+    for en_conv_hidden_size in [32, 32]:
+        config.en_conv_hidden_size = en_conv_hidden_size
+        for en_rnn_hidden_sizes in [ [16], [16, 16]]:
+            config.en_rnn_hidden_sizes = en_rnn_hidden_sizes
 
             run_one_config(config)

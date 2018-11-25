@@ -8,6 +8,7 @@ class MTNet:
             Q = tf.placeholder(tf.float32, shape = [None, self.config.T, self.config.D])
             Y = tf.placeholder(tf.float32, shape = [None, self.config.K])
 
+            lr = tf.placeholder(tf.float32)
             input_keep_prob = tf.placeholder(tf.float32)
             output_keep_prob = tf.placeholder(tf.float32)
 
@@ -51,11 +52,10 @@ class MTNet:
                     highway_b = tf.get_variable('highway_b', shape = [self.config.K], dtype = tf.float32,
                                                 initializer = tf.constant_initializer(0.1))
 
-                    y_pred_l = tf.matmul(Q[:, 0], highway_ws[0]) + highway_b
+                    y_pred_l = tf.matmul(Q[:, -1], highway_ws[0]) + highway_b
                     _, y_pred_l = tf.while_loop(lambda i, _ : tf.less(i, self.config.highway_window),
-                                                lambda i, acc : (i + 1, tf.matmul(Q[:, i], highway_ws[i]) + y_pred_l),
+                                                lambda i, acc : (i + 1, tf.matmul(Q[:, self.config.T - i - 1], highway_ws[i]) + y_pred_l),
                                                 loop_vars = [1, y_pred_l])
-
                     y_pred += y_pred_l
 
 
@@ -71,7 +71,7 @@ class MTNet:
 
         loss = tf.losses.absolute_difference(Y, y_pred)
         with tf.name_scope('Train'):
-            train_op = tf.train.AdamOptimizer(config.lr).minimize(loss)
+            train_op = tf.train.AdamOptimizer(lr).minimize(loss)
 
         # assignment
         self.X = X
@@ -79,6 +79,7 @@ class MTNet:
         self.Y = Y
         self.input_keep_prob = input_keep_prob
         self.output_keep_prob = output_keep_prob
+        self.lr = lr
         self.y_pred = y_pred
         self.loss = loss
         self.train_op = train_op
@@ -100,6 +101,7 @@ class MTNet:
         scope = 'Encoder_' + scope
         batch_size_new = self.config.batch_size * n
         Tc = self.config.T - self.config.W + 1
+        last_rnn_hidden_size = self.config.en_rnn_hidden_sizes[-1]
 
         # reshape input_x : <batch_size * n, T, D, 1>
         input_x = tf.reshape(input_x, shape = [-1, self.config.T, self.config.D, 1])
@@ -148,7 +150,7 @@ class MTNet:
             
             # attention weights
             attr_v = tf.get_variable('attr_v', shape = [Tc, 1], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
-            attr_w = tf.get_variable('attr_w', shape = [self.config.en_conv_hidden_size, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
+            attr_w = tf.get_variable('attr_w', shape = [last_rnn_hidden_size, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
             attr_u = tf.get_variable('attr_u', shape = [Tc, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
 
 
@@ -203,11 +205,13 @@ class MTNet:
                   self.Q : one_batch[1],
                   self.Y : one_batch[2],
                   self.input_keep_prob : self.config.input_keep_prob,
-                  self.output_keep_prob : self.config.output_keep_prob}
+                  self.output_keep_prob : self.config.output_keep_prob,
+                  self.lr : self.config.lr}
         else:
             fd = {self.X : one_batch[0],
                   self.Q : one_batch[1],
                   self.Y : one_batch[2],
                   self.input_keep_prob : 1.0,
-                  self.output_keep_prob :1.0}
+                  self.output_keep_prob :1.0,
+                  self.lr: self.config.lr}
         return fd;
