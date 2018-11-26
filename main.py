@@ -186,9 +186,9 @@ def run_one_config(config):
 
 if __name__ == '__main__':
     config = CONFIG()
-    for en_conv_hidden_size in [32, 32]:
+    for en_conv_hidden_size in [32]:
         config.en_conv_hidden_size = en_conv_hidden_size
-        for en_rnn_hidden_sizes in [ [16], [16, 16]]:
+        for en_rnn_hidden_sizes in [ [20, 32]]:
             config.en_rnn_hidden_sizes = en_rnn_hidden_sizes
 
             run_one_config(config)

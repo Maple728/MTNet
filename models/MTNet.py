@@ -21,10 +21,16 @@ class MTNet:
             u = self.__encoder(tf.reshape(Q, shape = [-1, 1, self.config.T, self.config.D]), 1, scope = 'in')
 
             p_is = tf.matmul(m_is, tf.transpose(u, perm = [0, 2, 1]))
+
+            # using softmax
             p_is = tf.squeeze(p_is, axis = [-1])
             p_is = tf.nn.softmax(p_is)
             # <batch_size, n, 1>
             p_is = tf.expand_dims(p_is, -1)
+
+            # using sigmoid
+            # p_is = tf.nn.sigmoid(p_is)
+
             # for summary
             p_is_mean, _ = tf.metrics.mean_tensor(p_is, updates_collections = 'summary_ops', name = 'p_is')
             tf.summary.histogram('p_is', p_is_mean)
@@ -51,6 +57,9 @@ class MTNet:
                                                 initializer = tf.truncated_normal_initializer(stddev = 0.1))
                     highway_b = tf.get_variable('highway_b', shape = [self.config.K], dtype = tf.float32,
                                                 initializer = tf.constant_initializer(0.1))
+
+                    # highway_x = tf.reshape(Q[:, -self.config.highway_window:], shape = [-1, self.config.highway_window * self.config.D])
+                    # y_pred_l = tf.matmul(highway_x, highway_ws) + highway_b
 
                     y_pred_l = tf.matmul(Q[:, -1], highway_ws[0]) + highway_b
                     _, y_pred_l = tf.while_loop(lambda i, _ : tf.less(i, self.config.highway_window),
@@ -156,7 +165,7 @@ class MTNet:
 
             for t in range(Tc):
                 # attr_v = tf.Variable(tf.truncated_normal(shape=[Tc, 1], stddev=0.1, dtype=tf.float32), name='attr_v')
-                # attr_w = tf.Variable(tf.truncated_normal(shape=[self.config.en_rnn_hidden_sizes[-1], Tc], stddev=0.1, dtype=tf.float32), name='attr_w')
+                # attr_w = tf.Variable(tf.truncated_normal(shape=[last_rnn_hidden_size, Tc], stddev=0.1, dtype=tf.float32), name='attr_w')
                 # attr_u = tf.Variable(tf.truncated_normal(shape=[Tc, Tc], stddev=0.1, dtype=tf.float32), name='attr_u')
 
                 # h(t-1) dot attr_w
