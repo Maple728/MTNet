@@ -1,6 +1,7 @@
 import pickle
 import numpy as np
 import pandas as pd
+import h5py
 from sklearn.preprocessing import MinMaxScaler
 
 class Dataset(object):
@@ -162,7 +163,7 @@ class BJPMDataset(Dataset):
     data_filename = './datasets/PRSA_data_7col.csv'
 
     def __init__(self, config):
-        Dataset.__init__(self)
+        Dataset.__init__(self, config)
 
         self.train_ds, self.valid_ds, self.test_ds = self.divide_ds(config, [0.6, 0.8])
         print('-Train dataset shape:', self.train_ds.shape)
@@ -271,3 +272,25 @@ class SolarEnergyDataset(Dataset):
 
         # <length, columns>
         return data
+
+class BikeNYCDataset(Dataset):
+    name = 'BikeNYC'
+    data_filename = './datasets/NYC14_M16x8_T60_NewEnd.h5'
+
+    def __init__(self, config):
+        Dataset.__init__(self, config)
+
+        self.train_ds, self.valid_ds = self.divide_ds(config, [0.8])
+        print('-Train dataset shape:', self.train_ds.shape)
+        print('-Valid dataset shape:', self.valid_ds.shape)
+
+    def get_dataset(self):
+        '''
+        Get dataset <length, D>
+        :return: <length, D>
+        '''
+        f = h5py.File(self.data_filename)
+        data = np.reshape(f['data'], [f['data'].shape[0], -1])
+
+        return data
+

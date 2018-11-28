@@ -62,3 +62,25 @@ class SolarEnergyConfig:
 
         self.lr = 0.003
         self.batch_size = 100
+
+class BikeNYCConfig:
+
+    def __init__(self):
+        self.T = 24 # timestep
+        self.W = 6 # convolution window size (convolution filter height)`
+        self.n = 6 # the number of the long-term memory series
+        self.highway_window = 12  # the window size of ar model
+
+        self.D = 256  # input's variable dimension (convolution filter width)
+        self.K = 256 # output's variable dimension
+
+        self.horizon = 1 # the horizon of predicted value
+
+        self.en_conv_hidden_size = 32
+        self.en_rnn_hidden_sizes = [32, 32]  # last size is equal to en_conv_hidden_size
+
+        self.input_keep_prob = 0.8
+        self.output_keep_prob = 1.0
+
+        self.lr = 0.003
+        self.batch_size = 32

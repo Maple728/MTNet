@@ -9,13 +9,17 @@ import os
 
 import numpy as np
 import tensorflow as tf
+from tensorflow.python import debug as tf_debug
 
 # GPU setting
 # os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 # os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+SCORE_TYPES = [['MAE', 'RMSE'], ['CORR', 'RSE']]
 
-CONFIG = SolarEnergyConfig
-DS_HANDLER = SolarEnergyDataset
+
+CONFIG = BJpmConfig
+DS_HANDLER = BJPMDataset
+score_type_index = 0
 
 is_train = True
 
@@ -96,7 +100,7 @@ def run_one_epoch(sess, model, batch_data, summary_writer, ds_handler, epoch_num
     summary = sess.run(model.merged_summary)
     summary_writer.add_summary(summary, epoch_num)
     # other summary
-    if model.config.K == 1:
+    if score_type_index == 0:
         mae = np.mean(abs(np.subtract(y_pred_list, y_real_list)))
         rmse = np.sqrt(np.mean(np.subtract(y_pred_list, y_real_list) ** 2))
 
@@ -132,12 +136,13 @@ def run_one_config(config):
 
     # build model
     with tf.Session() as sess:
+        #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
         model = MTNet(config)
         saver = tf.train.Saver()
         # data process
         ds_handler = DS_HANDLER(config)
         train_batch_data = ds_handler.get_all_batch_data(config, 'T')
-        valid_batch_data = ds_handler.get_all_batch_data(config, 'E')
+        valid_batch_data = ds_handler.get_all_batch_data(config, 'V')
 
         # generate log and model stored paths
         log_path = make_log_dir(config, ds_handler)
@@ -156,12 +161,7 @@ def run_one_config(config):
         best_score = float('inf')
 
         # indicate the score name
-        if config.K > 1:
-            score1_name = 'CORR'
-            score2_name = 'RSE'
-        else:
-            score1_name = 'MAE'
-            score2_name = 'RMSE'
+        score1_name, score2_name= SCORE_TYPES[score_type_index]
 
         for i in range(epochs):
             # decay lr
@@ -170,7 +170,7 @@ def run_one_config(config):
             # train one epoch
             run_one_epoch(sess, model, train_batch_data, train_writer, ds_handler, i, True)
             # evaluate
-            if i % 10 == 0:
+            if i % 5 == 0:
                 loss, scope1, score2 = run_one_epoch(sess, model, valid_batch_data, test_writer, ds_handler, i, False)
                 if best_score > score2:
                     best_score = score2
@@ -183,12 +183,11 @@ def run_one_config(config):
     # free default graph
     tf.reset_default_graph()
 
-
 if __name__ == '__main__':
     config = CONFIG()
-    for en_conv_hidden_size in [32]:
+    for en_conv_hidden_size in [32, 64]:
         config.en_conv_hidden_size = en_conv_hidden_size
-        for en_rnn_hidden_sizes in [ [20, 32]]:
+        for en_rnn_hidden_sizes in [ [32, 32], [32, 64]]:
             config.en_rnn_hidden_sizes = en_rnn_hidden_sizes
 
             run_one_config(config)

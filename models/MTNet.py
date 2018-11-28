@@ -1,5 +1,4 @@
 import tensorflow as tf
-
 class MTNet:
     def __init__(self, config, scope = 'MTNet'):
         self.config = config
@@ -32,8 +31,8 @@ class MTNet:
             # p_is = tf.nn.sigmoid(p_is)
 
             # for summary
-            p_is_mean, _ = tf.metrics.mean_tensor(p_is, updates_collections = 'summary_ops', name = 'p_is')
-            tf.summary.histogram('p_is', p_is_mean)
+            #p_is_mean, _ = tf.metrics.mean_tensor(p_is, updates_collections = 'summary_ops', name = 'p_is')
+            #tf.summary.histogram('p_is', p_is_mean)
 
             # <batch_size, n, en_rnn_hidden_sizes> = <batch_size, n, en_rnn_hidden_sizes> * <batch_size, n, 1>
             o_is = tf.multiply(c_is, p_is)
@@ -52,19 +51,19 @@ class MTNet:
             # ------------ ar component ------------
             with tf.variable_scope('AutoRegression'):
                 if self.config.highway_window > 0:
-                    highway_ws = tf.get_variable('highway_ws', shape = [self.config.highway_window, self.config.D, self.config.K],
+                    highway_ws = tf.get_variable('highway_ws', shape = [self.config.highway_window * self.config.D, self.config.K],
                                                 dtype = tf.float32,
                                                 initializer = tf.truncated_normal_initializer(stddev = 0.1))
                     highway_b = tf.get_variable('highway_b', shape = [self.config.K], dtype = tf.float32,
                                                 initializer = tf.constant_initializer(0.1))
 
-                    # highway_x = tf.reshape(Q[:, -self.config.highway_window:], shape = [-1, self.config.highway_window * self.config.D])
-                    # y_pred_l = tf.matmul(highway_x, highway_ws) + highway_b
+                    highway_x = tf.reshape(Q[:, -self.config.highway_window:], shape = [-1, self.config.highway_window * self.config.D])
+                    y_pred_l = tf.matmul(highway_x, highway_ws) + highway_b
 
-                    y_pred_l = tf.matmul(Q[:, -1], highway_ws[0]) + highway_b
-                    _, y_pred_l = tf.while_loop(lambda i, _ : tf.less(i, self.config.highway_window),
-                                                lambda i, acc : (i + 1, tf.matmul(Q[:, self.config.T - i - 1], highway_ws[i]) + y_pred_l),
-                                                loop_vars = [1, y_pred_l])
+                    # y_pred_l = tf.matmul(Q[:, -1], highway_ws[0]) + highway_b
+                    # _, y_pred_l = tf.while_loop(lambda i, _ : tf.less(i, self.config.highway_window),
+                    #                             lambda i, acc : (i + 1, tf.matmul(Q[:, self.config.T - i - 1], highway_ws[i]) + acc),
+                    #                             loop_vars = [1, y_pred_l])
                     y_pred += y_pred_l
 
 
@@ -72,8 +71,8 @@ class MTNet:
         #mae_loss, _ = tf.metrics.mean_absolute_error(Y, y_pred, updates_collections = 'summary_ops', name = 'mae_metric')
         #tf.summary.scalar('mae_loss', mae_loss)
 
-        #rmse_loss, _ = tf.metrics.root_mean_squared_error(Y, y_pred, updates_collections = 'summary_ops', name = 'rmse_metric')
-        #tf.summary.scalar("mse_loss", rmse_loss)
+        rmse_loss, _ = tf.metrics.root_mean_squared_error(Y, y_pred, updates_collections = 'summary_ops', name = 'rmse_metric')
+        tf.summary.scalar("rmse_loss", rmse_loss)
 
         statistics_vars = tf.get_collection(tf.GraphKeys.METRIC_VARIABLES)
         statistics_vars_initializer = tf.variables_initializer(var_list = statistics_vars)
@@ -97,7 +96,7 @@ class MTNet:
         self.merged_summary = tf.summary.merge_all()
         self.summary_updates = tf.get_collection('summary_ops')
 
-    def __encoder(self, input_x, n, strides = [1, 1, 1, 1], padding = 'VALID', activation_func = tf.nn.relu, scope = 'Encoder'):
+    def __encoder(self, origin_input_x, n, strides = [1, 1, 1, 1], padding = 'VALID', activation_func = tf.nn.relu, scope = 'Encoder'):
         '''
             Treat batch_size dimension and n dimension as one batch_size dimension (batch_size * n).
         :param input_x:  <batch_size, n, T, D>
@@ -113,7 +112,7 @@ class MTNet:
         last_rnn_hidden_size = self.config.en_rnn_hidden_sizes[-1]
 
         # reshape input_x : <batch_size * n, T, D, 1>
-        input_x = tf.reshape(input_x, shape = [-1, self.config.T, self.config.D, 1])
+        input_x = tf.reshape(origin_input_x, shape = [-1, self.config.T, self.config.D, 1])
 
         with tf.variable_scope(scope, reuse = tf.AUTO_REUSE):
             # cnn parameters
@@ -128,13 +127,6 @@ class MTNet:
 
 
             # tmporal attention layer and gru layer
-
-            # rnn inputs
-            # <Tc, batch_size_new, 1, en_conv_hidden_size>
-            rnn_input = tf.expand_dims( tf.transpose(h_conv1[:, :, 0, :], perm = [1, 0, 2]), -2)
-            # <en_conv_hidden_size, batch_size_new, Tc>
-            attr_input = tf.transpose(h_conv1[:, :, 0, :], perm = [2, 0, 1])
-
             # rnns
             rnns = [tf.nn.rnn_cell.GRUCell(h_size, activation = activation_func) for h_size in self.config.en_rnn_hidden_sizes]
             # dropout
@@ -150,51 +142,58 @@ class MTNet:
                 rnns = rnns[0]
 
             # attention layer
-            # <batch_size_new, en_rnn_hidden_sizes>
-            s_state = rnns.zero_state(batch_size_new, tf.float32)
-            if len(self.config.en_rnn_hidden_sizes) > 1:
-                h_state = s_state[-1]
-            else:
-                h_state = s_state
-            
+
             # attention weights
             attr_v = tf.get_variable('attr_v', shape = [Tc, 1], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
             attr_w = tf.get_variable('attr_w', shape = [last_rnn_hidden_size, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
             attr_u = tf.get_variable('attr_u', shape = [Tc, Tc], dtype = tf.float32, initializer = tf.truncated_normal_initializer(stddev = 0.1))
 
+            # rnn inputs
+            # <batch_size, n, Tc, en_conv_hidden_size>
+            rnn_input = tf.reshape(h_conv1, shape=[-1, n, Tc, self.config.en_conv_hidden_size])
 
-            for t in range(Tc):
-                # attr_v = tf.Variable(tf.truncated_normal(shape=[Tc, 1], stddev=0.1, dtype=tf.float32), name='attr_v')
-                # attr_w = tf.Variable(tf.truncated_normal(shape=[last_rnn_hidden_size, Tc], stddev=0.1, dtype=tf.float32), name='attr_w')
-                # attr_u = tf.Variable(tf.truncated_normal(shape=[Tc, Tc], stddev=0.1, dtype=tf.float32), name='attr_u')
+            # n * <batch_size, last_rnns_size>
+            res_hstates = tf.TensorArray(tf.float32, n)
+            for k in range(n):
+                # <batch_size, en_conv_hidden_size, Tc>
+                attr_input = tf.transpose(rnn_input[:, k], perm = [0, 2, 1])
 
-                # h(t-1) dot attr_w
-                h_part = tf.matmul(h_state, attr_w)
+                # <batch_size, last_rnn_hidden_size>
+                s_state = rnns.zero_state(self.config.batch_size, tf.float32)
+                if len(self.config.en_rnn_hidden_sizes) > 1:
+                    h_state = s_state[-1]
+                else:
+                    h_state = s_state
 
-                # en_conv_hidden_size * <batch_size_new, 1>
-                e_ks = tf.TensorArray(tf.float32, self.config.en_conv_hidden_size)
-                _, output = tf.while_loop(lambda i, _ : tf.less(i, self.config.en_conv_hidden_size),
-                                          lambda i, output_ta : (i + 1, output_ta.write(i, tf.matmul(tf.tanh( h_part + tf.matmul(attr_input[i], attr_u) ), attr_v))),
-                                          [0, e_ks])
-                # <batch_size_new, en_conv_hidden_size, 1>
-                e_ks = tf.transpose(output.stack(), perm = [1, 0, 2])
+                for t in range(Tc):
+                    # attr_v = tf.Variable(tf.truncated_normal(shape=[Tc, 1], stddev=0.1, dtype=tf.float32), name='attr_v')
+                    # attr_w = tf.Variable(tf.truncated_normal(shape=[last_rnn_hidden_size, Tc], stddev=0.1, dtype=tf.float32), name='attr_w')
+                    # attr_u = tf.Variable(tf.truncated_normal(shape=[Tc, Tc], stddev=0.1, dtype=tf.float32), name='attr_u')
 
-                e_ks = tf.reshape(e_ks, shape = [-1, self.config.en_conv_hidden_size])
-                # <batch_size, en_conv_hidden_size>
-                a_ks = tf.nn.softmax(e_ks)
+                    # h(t-1) dot attr_w
+                    h_part = tf.matmul(h_state, attr_w)
 
-                # for summary
-                if t == Tc - 1:
-                    a_ks_mean, _ = tf.metrics.mean_tensor(a_ks[0], updates_collections='summary_ops', name='a_ks')
-                    tf.summary.histogram('a_ks', a_ks_mean)
+                    # en_conv_hidden_size * <batch_size_new, 1>
+                    e_ks = tf.TensorArray(tf.float32, self.config.en_conv_hidden_size)
+                    _, output = tf.while_loop(lambda i, _ : tf.less(i, self.config.en_conv_hidden_size),
+                                              lambda i, output_ta : (i + 1, output_ta.write(i, tf.matmul(tf.tanh( h_part + tf.matmul(attr_input[:, i], attr_u) ), attr_v))),
+                                              [0, e_ks])
+                    # <batch_size, en_conv_hidden_size, 1>
+                    e_ks = tf.transpose(output.stack(), perm = [1, 0, 2])
+                    e_ks = tf.reshape(e_ks, shape = [-1, self.config.en_conv_hidden_size])
 
-                x_t = tf.matmul( rnn_input[t], tf.matrix_diag(a_ks))
-                # <batch_size, en_conv_hidden_size>
-                x_t = tf.reshape(x_t, shape = [-1, self.config.en_conv_hidden_size])
+                    # <batch_size, en_conv_hidden_size>
+                    a_ks = tf.nn.softmax(e_ks)
 
-                h_state, s_state = rnns(x_t, s_state)
-                
-            return tf.reshape(h_state, shape = [-1, n, self.config.en_rnn_hidden_sizes[-1]])
+                    x_t = tf.matmul( tf.expand_dims(attr_input[:, :, t], -2), tf.matrix_diag(a_ks))
+                    # <batch_size, en_conv_hidden_size>
+                    x_t = tf.reshape(x_t, shape = [-1, self.config.en_conv_hidden_size])
+
+                    h_state, s_state = rnns(x_t, s_state)
+
+                res_hstates = res_hstates.write(k, h_state)
+
+        return tf.transpose(res_hstates.stack(), perm = [1, 0, 2])
 
     def train(self, one_batch, sess):
         fd = self.get_feed_dict(one_batch, True)
