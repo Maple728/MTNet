@@ -132,8 +132,8 @@ class MTNet:
             # dropout
             if self.config.input_keep_prob < 1 or self.config.output_keep_prob < 1:
                 rnns = [tf.nn.rnn_cell.DropoutWrapper(rnn,
-                                                      input_keep_prob = self.config.input_keep_prob,
-                                                      output_keep_prob = self.config.output_keep_prob)
+                                                      input_keep_prob = self.input_keep_prob,
+                                                      output_keep_prob = self.output_keep_prob)
                         for rnn in rnns]
 
             if len(rnns) > 1:
@@ -166,9 +166,6 @@ class MTNet:
                     h_state = s_state
 
                 for t in range(Tc):
-                    # attr_v = tf.Variable(tf.truncated_normal(shape=[Tc, 1], stddev=0.1, dtype=tf.float32), name='attr_v')
-                    # attr_w = tf.Variable(tf.truncated_normal(shape=[last_rnn_hidden_size, Tc], stddev=0.1, dtype=tf.float32), name='attr_w')
-                    # attr_u = tf.Variable(tf.truncated_normal(shape=[Tc, Tc], stddev=0.1, dtype=tf.float32), name='attr_u')
 
                     # h(t-1) dot attr_w
                     h_part = tf.matmul(h_state, attr_w)
@@ -209,17 +206,17 @@ class MTNet:
 
     def get_feed_dict(self, one_batch, is_train):
         if is_train:
-            fd = {self.X : one_batch[0],
-                  self.Q : one_batch[1],
-                  self.Y : one_batch[2],
-                  self.input_keep_prob : self.config.input_keep_prob,
-                  self.output_keep_prob : self.config.output_keep_prob,
-                  self.lr : self.config.lr}
-        else:
-            fd = {self.X : one_batch[0],
-                  self.Q : one_batch[1],
-                  self.Y : one_batch[2],
-                  self.input_keep_prob : 1.0,
-                  self.output_keep_prob :1.0,
+            fd = {self.X: one_batch[0],
+                  self.Q: one_batch[1],
+                  self.Y: one_batch[2],
+                  self.input_keep_prob: self.config.input_keep_prob,
+                  self.output_keep_prob: self.config.output_keep_prob,
                   self.lr: self.config.lr}
-        return fd;
+        else:
+            fd = {self.X: one_batch[0],
+                  self.Q: one_batch[1],
+                  self.Y: one_batch[2],
+                  self.input_keep_prob: 1.0,
+                  self.output_keep_prob: 1.0,
+                  self.lr: self.config.lr}
+        return fd

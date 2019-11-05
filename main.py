@@ -26,6 +26,7 @@ is_train = True
 MODEL_DIR = os.path.join('logs', 'checkpoints')
 LOG_DIR = os.path.join('logs', 'graphs')
 
+
 def get_num_params():
     num_params = 0
     for variable in tf.trainable_variables():
@@ -33,13 +34,16 @@ def get_num_params():
         num_params += reduce(mul, [dim.value for dim in shape], 1)
     return num_params
 
+
 def make_config_string(config):
     return "T%s_W%s_n%s_hw%s_dropin%s_cnn%s_rnn%s" % \
            (config.T, config.W, config.n, config.highway_window, config.input_keep_prob,
             config.en_conv_hidden_size, config.en_rnn_hidden_sizes)
 
+
 def make_log_dir(config, ds_handler):
     return os.path.join(LOG_DIR, ds_handler.name, 'horizon' + str(config.horizon),make_config_string(config))
+
 
 def make_model_path(config, ds_handler):
     dir = os.path.join(MODEL_DIR, ds_handler.name, 'horizon' + str(config.horizon))
@@ -47,11 +51,13 @@ def make_model_path(config, ds_handler):
         os.makedirs(dir)
     return os.path.join(dir, make_config_string(config), 'mtnet.ckpt')
 
+
 def calc_rse(y_real_list, y_pred_list):
     rse_numerator = np.sum(np.subtract(y_pred_list, y_real_list) ** 2)
     rse_denominator = np.sum(np.subtract(y_real_list, np.mean(y_real_list)) ** 2)
     rse = np.sqrt(np.divide(rse_numerator, rse_denominator))
     return rse
+
 
 def calc_corr(y_real_list, y_pred_list):
     y_real_mean = np.mean(y_real_list, axis = 0)
@@ -64,6 +70,7 @@ def calc_corr(y_real_list, y_pred_list):
     corr = np.mean(numerator / denominator)
 
     return corr
+
 
 def run_one_epoch(sess, model, batch_data, summary_writer, ds_handler, epoch_num, is_train = True):
     # reset statistics variables
@@ -182,6 +189,7 @@ def run_one_config(config):
 
     # free default graph
     tf.reset_default_graph()
+
 
 if __name__ == '__main__':
     config = CONFIG()
